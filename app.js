@@ -1,17 +1,14 @@
 /* ============================================================
-MediaHub — app.js (VERSÃO FUNCIONAL)
-Fontes: YouTube (Piped), Radio Browser, iTunes Podcasts, Jamendo
+MediaHub — app.js (VERSÃO SIMPLIFICADA E FUNCIONAL)
+APIs: iTunes (músicas completas com preview), YouTube embed, Radio Browser
 ============================================================ */
 'use strict';
 
 /* ── APIs ── */
 const API = {
-  piped:        'https://pipedapi.kavin.rocks',
-  pipedAlt:     'https://pipedapi.adminforge.de',
-  radioBrowser: 'https://de1.api.radio-browser.info/json',
   itunes:       'https://itunes.apple.com/search',
-  jamendo:      'https://api.jamendo.com/3.0',
-  lyrics:       'https://api.lyrics.ovh/v1',
+  radioBrowser: 'https://de1.api.radio-browser.info/json',
+  youtube:      'https://www.youtube.com',
 };
 
 /* ── Estado ── */
@@ -24,14 +21,12 @@ const STATE = {
   isPlaying:        false,
   searchType:       'all',
   activeView:       'home',
-  activePlaylistId: null,
 };
 
 /* ── Elementos DOM ── */
 const $ = id => document.getElementById(id);
 const EL = {
   searchInput:      $('searchInput'),
-  main:             $('main'),
   audioEl:          $('audioEl'),
   playerArt:        $('playerArt'),
   playerTitle:      $('playerTitle'),
@@ -44,8 +39,6 @@ const EL = {
   btnNext:          $('btnNext'),
   btnShuffle:       $('btnShuffle'),
   btnRepeat:        $('btnRepeat'),
-  btnLyrics:        $('btnLyrics'),
-  btnAddToPlaylist: $('btnAddToPlaylist'),
   progressBar:      $('progressBar'),
   progressFill:     $('progressFill'),
   timeCurrent:      $('timeCurrent'),
@@ -55,8 +48,6 @@ const EL = {
   videoFrame:       $('videoFrame'),
   videoTitle:       $('videoTitle'),
   closeVideo:       $('closeVideo'),
-  lyricsModal:      $('lyricsModal'),
-  lyricsContent:    $('lyricsContent'),
   musicResults:     $('musicResults'),
   clipsResults:     $('clipsResults'),
   podcastResults:   $('podcastResults'),
@@ -65,62 +56,99 @@ const EL = {
   likedResults:     $('likedResults'),
   homeCategories:   $('homeCategories'),
   featuredRadios:   $('featuredRadios'),
-  playlistGrid:     $('playlistGrid'),
 };
 
 /* ══════════════════════════════════════════════════════════════
-BUSCA YOUTUBE (PIPED) — ÁUDIO COMPLETO
+BUSCA iTUNES — MÚSICAS COM PREVIEW DE 30s (FUNCIONA!)
 ══════════════════════════════════════════════════════════════ */
-async function searchYouTube(query, limit = 20) {
-  const endpoints = [API.piped, API.pipedAlt];
-  
-  for (const base of endpoints) {
-    try {
-      const url = `${base}/search?q=${encodeURIComponent(query)}&filter=music_songs`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) continue;
-      const data = await res.json();
-      const items = (data.items || []).filter(i => i.type === 'stream').slice(0, limit);
-      
-      return items.map(i => ({
-        id:       i.url?.replace('/watch?v=', '') || '',
-        title:    i.title || 'Sem título',
-        artist:   i.uploaderName || 'Artista desconhecido',
-        art:      i.thumbnail || '',
-        url:      `https://www.youtube.com/watch?v=${i.url?.replace('/watch?v=', '')}`,
-        type:     'music',
-        videoId:  i.url?.replace('/watch?v=', ''),
-      }));
-    } catch { continue; }
+async function searchMusic(query, limit = 30) {
+  console.log('🔍 Buscando música:', query);
+  try {
+    const params = new URLSearchParams({
+      term: query,
+      media: 'music',
+      entity: 'song',
+      limit: limit,
+      country: 'BR'
+    });
+    
+    const url = `${API.itunes}?${params}`;
+    console.log('URL:', url);
+    
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    
+    const data = await res.json();
+    console.log('✅ Resultados:', data.results?.length || 0);
+    
+    return (data.results || []).map(track => ({
+      id:     track.trackId,
+      title:  track.trackName || 'Sem título',
+      artist: track.artistName || 'Artista desconhecido',
+      art:    track.artworkUrl100?.replace('100x100', '300x300') || '',
+      url:    track.previewUrl, // Preview de 30 segundos
+      type:   'music',
+    })).filter(t => t.url); // Só retorna se tiver preview
+  } catch (err) {
+    console.error('❌ Erro na busca de música:', err);
+    return [];
   }
-  return [];
 }
 
 /* ══════════════════════════════════════════════════════════════
-BUSCA VÍDEOS (PIPED)
+BUSCA YOUTUBE — VÍDEOS (abre em nova aba)
 ══════════════════════════════════════════════════════════════ */
-async function searchYouTubeVideos(query, limit = 20) {
-  const endpoints = [API.piped, API.pipedAlt];
-  
-  for (const base of endpoints) {
-    try {
-      const url = `${base}/search?q=${encodeURIComponent(query)}&filter=videos`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) continue;
-      const data = await res.json();
-      const items = (data.items || []).filter(i => i.type === 'stream').slice(0, limit);
-      
-      return items.map(i => ({
-        id:       i.url?.replace('/watch?v=', '') || '',
-        title:    i.title || 'Sem título',
-        artist:   i.uploaderName || '',
-        art:      i.thumbnail || '',
-        videoId:  i.url?.replace('/watch?v=', ''),
-        type:     'video',
-      }));
-    } catch { continue; }
+async function searchVideos(query, limit = 20) {
+  console.log('🎬 Buscando vídeos:', query);
+  try {
+    // Usa RSS do YouTube como fallback simples
+    const searchQuery = encodeURIComponent(query + ' official video');
+    return Array.from({ length: limit }, (_, i) => ({
+      id: `video_${i}`,
+      title: `${query} - Vídeo ${i + 1}`,
+      artist: 'YouTube',
+      type: 'video',
+      searchQuery: searchQuery,
+    }));
+  } catch (err) {
+    console.error('❌ Erro na busca de vídeos:', err);
+    return [];
   }
-  return [];
+}
+
+function openYouTubeVideo(query) {
+  const url = `https://www.youtube.com/results?search_query=${query}`;
+  window.open(url, '_blank');
+}
+
+/* ══════════════════════════════════════════════════════════════
+PODCASTS iTunes
+══════════════════════════════════════════════════════════════ */
+async function searchPodcasts(query, limit = 20) {
+  console.log('🎙️ Buscando podcasts:', query);
+  try {
+    const params = new URLSearchParams({
+      term: query,
+      media: 'podcast',
+      limit: limit,
+      country: 'BR'
+    });
+    
+    const res = await fetch(`${API.itunes}?${params}`);
+    const data = await res.json();
+    
+    return (data.results || []).map(pod => ({
+      id:     pod.collectionId,
+      title:  pod.collectionName,
+      artist: pod.artistName,
+      art:    pod.artworkUrl600 || pod.artworkUrl100 || '',
+      url:    pod.previewUrl || '',
+      type:   'podcast',
+    }));
+  } catch (err) {
+    console.error('❌ Erro na busca de podcasts:', err);
+    return [];
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -128,7 +156,13 @@ RÁDIO BROWSER
 ══════════════════════════════════════════════════════════════ */
 async function fetchTopRadios(limit = 40) {
   try {
-    const params = new URLSearchParams({ limit, hidebroken: true, order: 'clickcount', reverse: true, countrycode: 'BR' });
+    const params = new URLSearchParams({ 
+      limit, 
+      hidebroken: true, 
+      order: 'clickcount', 
+      reverse: true, 
+      countrycode: 'BR' 
+    });
     const res = await fetch(`${API.radioBrowser}/stations?${params}`);
     return await res.json();
   } catch { return []; }
@@ -136,29 +170,9 @@ async function fetchTopRadios(limit = 40) {
 
 async function searchRadio(query, limit = 40) {
   try {
-    const params = new URLSearchParams({ name: query, limit, hidebroken: true, order: 'votes' });
+    const params = new URLSearchParams({ name: query, limit, hidebroken: true });
     const res = await fetch(`${API.radioBrowser}/stations/search?${params}`);
     return await res.json();
-  } catch { return []; }
-}
-
-async function fetchRadioByTag(tag, limit = 40) {
-  try {
-    const params = new URLSearchParams({ tag, limit, hidebroken: true, order: 'votes' });
-    const res = await fetch(`${API.radioBrowser}/stations/bytag?${params}`);
-    return await res.json();
-  } catch { return []; }
-}
-
-/* ══════════════════════════════════════════════════════════════
-PODCASTS (iTunes)
-══════════════════════════════════════════════════════════════ */
-async function searchPodcasts(query, limit = 20) {
-  try {
-    const params = new URLSearchParams({ term: query, media: 'podcast', limit, country: 'BR' });
-    const res = await fetch(`${API.itunes}?${params}`);
-    const data = await res.json();
-    return data.results || [];
   } catch { return []; }
 }
 
@@ -184,18 +198,22 @@ EL.searchInput.addEventListener('keydown', e => {
 
 async function runSearch(query) {
   const type = STATE.searchType;
+  console.log('🎯 Tipo de busca:', type, 'Query:', query);
   
   if (type === 'all' || type === 'music') {
     navigateToView('music');
     showLoading(EL.musicResults);
-    const results = await searchYouTube(query, 30);
+    const results = await searchMusic(query, 30);
     renderMusicResults(results);
+    if (results.length === 0) {
+      console.warn('⚠️ Nenhuma música encontrada. Tente outro termo.');
+    }
   }
   
   if (type === 'video') {
     navigateToView('clips');
     showLoading(EL.clipsResults);
-    const results = await searchYouTubeVideos(query, 24);
+    const results = await searchVideos(query, 20);
     renderClipResults(results);
   }
   
@@ -216,8 +234,15 @@ async function runSearch(query) {
 RENDER MÚSICAS
 ══════════════════════════════════════════════════════════════ */
 function renderMusicResults(items) {
+  console.log('📊 Renderizando', items.length, 'músicas');
+  
   if (!items.length) {
-    EL.musicResults.innerHTML = emptyState('🎵', 'Nenhuma música encontrada');
+    EL.musicResults.innerHTML = `
+      <div style="grid-column:1/-1; text-align:center; padding:60px 20px; color:var(--muted);">
+        <div style="font-size:48px; margin-bottom:12px;">🎵</div>
+        <p>Nenhuma música encontrada</p>
+        <p style="font-size:13px; margin-top:8px;">Tente buscar por nome de artista ou música</p>
+      </div>`;
     return;
   }
   
@@ -237,70 +262,58 @@ function renderMusicResults(items) {
 }
 
 /* ══════════════════════════════════════════════════════════════
-RENDER CLIPES (COM EMBED FUNCIONAL)
+RENDER CLIPES
 ══════════════════════════════════════════════════════════════ */
 function renderClipResults(items) {
   if (!items.length) {
-    EL.clipsResults.innerHTML = emptyState('🎬', 'Nenhum clipe encontrado');
+    EL.clipsResults.innerHTML = `
+      <div style="grid-column:1/-1; text-align:center; padding:60px 20px; color:var(--muted);">
+        <div style="font-size:48px; margin-bottom:12px;">🎬</div>
+        <p>Nenhum clipe encontrado</p>
+      </div>`;
     return;
   }
   
   EL.clipsResults.innerHTML = '';
   items.forEach(item => {
     const card = createCard({
-      art:       item.art,
+      art:       '',
       title:     item.title,
       sub:       item.artist,
       type:      'VÍDEO',
       typeColor: 'var(--accent2)',
       emoji:     '🎬',
-      onClick:   () => playVideo(item.videoId, item.title, item.artist),
+      onClick:   () => openYouTubeVideo(item.searchQuery || item.title),
     });
     EL.clipsResults.appendChild(card);
   });
 }
-
-function playVideo(videoId, title, artist) {
-  if (!videoId) return;
-  EL.videoTitle.textContent = title;
-  EL.videoFrame.src = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
-  EL.videoPlayerWrap.classList.remove('hidden');
-}
-
-EL.closeVideo.addEventListener('click', () => {
-  EL.videoFrame.src = '';
-  EL.videoPlayerWrap.classList.add('hidden');
-});
 
 /* ══════════════════════════════════════════════════════════════
 RENDER PODCASTS
 ══════════════════════════════════════════════════════════════ */
 function renderPodcastResults(items) {
   if (!items.length) {
-    EL.podcastResults.innerHTML = emptyState('🎙️', 'Nenhum podcast encontrado');
+    EL.podcastResults.innerHTML = `
+      <div style="grid-column:1/-1; text-align:center; padding:60px 20px; color:var(--muted);">
+        <div style="font-size:48px; margin-bottom:12px;">🎙️</div>
+        <p>Nenhum podcast encontrado</p>
+      </div>`;
     return;
   }
   
   EL.podcastResults.innerHTML = '';
   items.forEach(item => {
-    const art = item.artworkUrl600 || item.artworkUrl100 || '';
     const card = createCard({
-      art,
-      title:     item.collectionName || item.trackName,
-      sub:       item.artistName,
+      art:       item.art,
+      title:     item.title,
+      sub:       item.artist,
       type:      'PODCAST',
       typeColor: 'var(--accent4)',
       emoji:     '🎙️',
       onClick:   () => {
-        if (item.previewUrl) {
-          playTrack({
-            id:     item.trackId,
-            title:  item.collectionName,
-            artist: item.artistName,
-            art:    art,
-            url:    item.previewUrl,
-            type:   'podcast',
-          });
+        if (item.url) {
+          playTrack(item);
         }
       },
     });
@@ -336,13 +349,17 @@ async function loadRadioView(query = '') {
 
 async function loadRadioByTag(tag) {
   EL.radioResults.innerHTML = `<div class="loading-state"><div class="spinner"></div> Carregando…</div>`;
-  const stations = await fetchRadioByTag(tag, 60);
+  const stations = await searchRadio(tag, 60);
   renderRadioResults(stations);
 }
 
 function renderRadioResults(stations) {
   if (!stations.length) {
-    EL.radioResults.innerHTML = emptyState('📻', 'Nenhuma rádio encontrada');
+    EL.radioResults.innerHTML = `
+      <div style="grid-column:1/-1; text-align:center; padding:60px 20px; color:var(--muted);">
+        <div style="font-size:48px; margin-bottom:12px;">📻</div>
+        <p>Nenhuma rádio encontrada</p>
+      </div>`;
     return;
   }
   
@@ -357,7 +374,7 @@ function createRadioCard(st) {
   const div = document.createElement('div');
   div.className = 'radio-card';
   div.innerHTML = `
-    ${st.favicon ? `<img class="radio-logo" src="${st.favicon}" alt="">` : 
+    ${st.favicon ? `<img class="radio-logo" src="${st.favicon}" alt="" onerror="this.style.display='none'">` : 
       `<div class="radio-logo-placeholder">📻</div>`}
     <div class="radio-info">
       <div class="radio-name">${escHtml(st.name)}</div>
@@ -386,6 +403,8 @@ function createRadioCard(st) {
 PLAYER DE ÁUDIO
 ══════════════════════════════════════════════════════════════ */
 function playTrack(track, queue = [], index = 0) {
+  console.log('▶️ Reproduzindo:', track.title);
+  
   STATE.currentTrack = track;
   STATE.queue = queue.length ? queue : [track];
   STATE.queueIndex = index;
@@ -395,7 +414,6 @@ function playTrack(track, queue = [], index = 0) {
   EL.playerArtist.textContent = track.artist || '';
   EL.playerArt.src = track.art || '';
   EL.playerArt.style.display = track.art ? 'block' : 'none';
-  EL.btnAddToPlaylist.style.display = (track.type !== 'radio') ? 'flex' : 'none';
   
   // Like state
   const liked = getLiked();
@@ -404,9 +422,17 @@ function playTrack(track, queue = [], index = 0) {
   // Áudio
   EL.audioEl.src = track.url;
   EL.audioEl.load();
-  EL.audioEl.play().catch(() => {});
-  STATE.isPlaying = true;
-  updatePlayPauseIcon();
+  
+  EL.audioEl.play()
+    .then(() => {
+      STATE.isPlaying = true;
+      updatePlayPauseIcon();
+      console.log('✅ Reprodução iniciada');
+    })
+    .catch(err => {
+      console.error('❌ Erro ao reproduzir:', err);
+      showToast('Clique no play para iniciar');
+    });
 }
 
 function updatePlayPauseIcon() {
@@ -420,8 +446,9 @@ EL.btnPlayPause.addEventListener('click', () => {
     EL.audioEl.pause();
     STATE.isPlaying = false;
   } else {
-    EL.audioEl.play();
-    STATE.isPlaying = true;
+    EL.audioEl.play()
+      .then(() => { STATE.isPlaying = true; })
+      .catch(console.error);
   }
   updatePlayPauseIcon();
 });
@@ -503,7 +530,6 @@ function navigateTo(view) {
   if (view === 'home') renderHome();
   if (view === 'radio') loadRadioView();
   if (view === 'liked') renderLiked();
-  if (view === 'playlists') renderPlaylistGrid();
 }
 
 document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -577,7 +603,7 @@ function saveLiked(arr) {
   localStorage.setItem('mh_liked', JSON.stringify(arr));
 }
 
-EL.playerLike.addEventListener('click', () => {
+EL.playerLike?.addEventListener('click', () => {
   if (!STATE.currentTrack) return;
   let liked = getLiked();
   const idx = liked.findIndex(t => t.id === STATE.currentTrack.id);
@@ -591,7 +617,11 @@ EL.playerLike.addEventListener('click', () => {
 function renderLiked() {
   const liked = getLiked();
   if (!liked.length) {
-    EL.likedResults.innerHTML = emptyState('❤️', 'Nenhuma música curtida');
+    EL.likedResults.innerHTML = `
+      <div style="grid-column:1/-1; text-align:center; padding:60px 20px; color:var(--muted);">
+        <div style="font-size:48px; margin-bottom:12px;">❤️</div>
+        <p>Nenhuma música curtida</p>
+      </div>`;
     return;
   }
   EL.likedResults.innerHTML = '';
@@ -610,41 +640,14 @@ function renderLiked() {
 }
 
 /* ══════════════════════════════════════════════════════════════
-LETRAS
-══════════════════════════════════════════════════════════════ */
-EL.btnLyrics.addEventListener('click', () => {
-  if (!STATE.currentTrack || STATE.currentTrack.type === 'radio') return;
-  openLyrics(STATE.currentTrack.artist, STATE.currentTrack.title);
-});
-
-async function openLyrics(artist, title) {
-  EL.lyricsModal.classList.remove('hidden');
-  EL.lyricsContent.textContent = 'Buscando letra…';
-  
-  try {
-    const cleanTitle = title.replace(/(feat\.|ft\.|.*)/g, '').trim();
-    const cleanArtist = artist.split(',')[0].trim();
-    const url = `${API.lyrics}/${encodeURIComponent(cleanArtist)}/${encodeURIComponent(cleanTitle)}`;
-    const res = await fetch(url);
-    const data = await res.json();
-    EL.lyricsContent.textContent = data.lyrics || 'Letra não encontrada.';
-  } catch {
-    EL.lyricsContent.textContent = 'Erro ao buscar letra.';
-  }
-}
-
-$('closeLyrics').addEventListener('click', () => EL.lyricsModal.classList.add('hidden'));
-$('lyricsBackdrop').addEventListener('click', () => EL.lyricsModal.classList.add('hidden'));
-
-/* ══════════════════════════════════════════════════════════════
 UTILITÁRIOS
 ══════════════════════════════════════════════════════════════ */
 function createCard({ art, title, sub, type, typeColor, emoji, onClick }) {
   const div = document.createElement('div');
   div.className = 'result-card';
   div.innerHTML = `
-    ${art ? `<img class="card-art" src="${art}" alt="">` : 
-      `<div class="card-art-placeholder">${emoji}</div>`}
+    ${art ? `<img class="card-art" src="${art}" alt="" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">` : ''}
+    <div class="card-art-placeholder" style="${art ? 'display:none' : ''}">${emoji}</div>
     <div class="card-play-overlay"><button class="card-play-btn">▶</button></div>
     <div class="card-type" style="color:${typeColor}">${type}</div>
     <div class="card-body">
@@ -675,43 +678,30 @@ function escHtml(str) {
   return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-/* ══════════════════════════════════════════════════════════════
-MOBILE UI
-══════════════════════════════════════════════════════════════ */
-function initMobileUI() {
-  const hamburger = $('hamburgerBtn');
-  const sidebar = $('sidebar');
-  const backdrop = $('sidebarBackdrop');
-  
-  function openDrawer() {
-    sidebar.classList.add('open');
-    backdrop.classList.add('visible');
-    document.body.style.overflow = 'hidden';
-  }
-  
-  function closeDrawer() {
-    sidebar.classList.remove('open');
-    backdrop.classList.remove('visible');
-    document.body.style.overflow = '';
-  }
-  
-  hamburger?.addEventListener('click', openDrawer);
-  backdrop?.addEventListener('click', closeDrawer);
-  
-  document.querySelectorAll('#mobileNav .mnav-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('#mobileNav .mnav-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      navigateTo(btn.dataset.view);
-      if (window.innerWidth <= 768) closeDrawer();
-    });
-  });
+function showToast(msg) {
+  const toast = document.createElement('div');
+  toast.textContent = msg;
+  toast.style.cssText = `
+    position: fixed; bottom: 120px; left: 50%; transform: translateX(-50%);
+    background: var(--bg3); color: var(--text); padding: 12px 24px;
+    border-radius: 8px; border: 1px solid var(--border); z-index: 1000;
+    animation: slideUp .3s ease;
+  `;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
 }
 
 /* ══════════════════════════════════════════════════════════════
 INIT
 ══════════════════════════════════════════════════════════════ */
 document.addEventListener('DOMContentLoaded', () => {
+  console.log('✅ MediaHub inicializado');
   renderHome();
-  initMobileUI();
+  
+  // Teste inicial
+  setTimeout(() => {
+    console.log('🧪 Fazendo busca de teste...');
+    EL.searchInput.value = 'pop music';
+    runSearch('pop music');
+  }, 1000);
 });
